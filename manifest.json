@@ -1,7 +1,8 @@
 {
-  "name": "Timesheet Calculator",
+  "name": "Timesheet Tracker",
   "short_name": "Timesheet",
-  "start_url": "/",
+  "start_url": "/Timesheet-Tracker/",
+  "scope": "/Timesheet-Tracker/",
   "display": "standalone",
   "background_color": "#ffffff",
   "theme_color": "#8B5CF6",
