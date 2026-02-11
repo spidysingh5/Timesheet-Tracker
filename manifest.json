@@ -1,7 +1,7 @@
 {
   "name": "Timesheet Calculator",
   "short_name": "Timesheet",
-  "start_url": "./timesheet-app.html",
+  "start_url": "/",
   "display": "standalone",
   "background_color": "#ffffff",
   "theme_color": "#8B5CF6",
