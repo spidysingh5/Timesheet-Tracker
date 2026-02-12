@@ -1,0 +1,655 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Timesheet Tracker">
+    <meta name="theme-color" content="#8B5CF6">
+    <title>Timesheet Tracker</title>
+    
+    <link rel="manifest" href="manifest.json">
+    <link rel="icon" type="image/png" href="app-icon.png">
+    <link rel="apple-touch-icon" href="app-icon.png">
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <style>
+        * {
+            -webkit-tap-highlight-color: transparent;
+        }
+        body {
+            overscroll-behavior: none;
+            touch-action: pan-y;
+        }
+        input[type="number"]::-webkit-inner-spin-button,
+        input[type="number"]::-webkit-outer-spin-button {
+            -webkit-appearance: none;
+            margin: 0;
+        }
+        input[type="number"] {
+            -moz-appearance: textfield;
+        }
+        
+        .install-prompt {
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            right: 20px;
+            background: white;
+            padding: 16px;
+            border-radius: 16px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            z-index: 1000;
+            animation: slideUp 0.3s ease-out;
+        }
+        
+        @keyframes slideUp {
+            from {
+                transform: translateY(100px);
+                opacity: 0;
+            }
+            to {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+
+        input:disabled {
+            background-color: #f3f4f6;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    <div id="install-prompt"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        function TimesheetTracker() {
+          const [hours, setHours] = useState('');
+          const [minutes, setMinutes] = useState('');
+          const [officeCheckout, setOfficeCheckout] = useState('');
+          const [result, setResult] = useState(null);
+          const [deferredPrompt, setDeferredPrompt] = useState(null);
+          const [showInstallPrompt, setShowInstallPrompt] = useState(false);
+          const [officeCheckin, setOfficeCheckin] = useState('');
+          const [liveTimer, setLiveTimer] = useState(null);
+          const [isTimerRunning, setIsTimerRunning] = useState(false);
+          const [wfhTimes, setWfhTimes] = useState({ checkin: '', checkout: '' });
+
+          const TARGET_HOURS = 9;
+          const TARGET_MINUTES = 15;
+          const TOTAL_TARGET_MINUTES = TARGET_HOURS * 60 + TARGET_MINUTES;
+
+          // Live Timer Effect
+          useEffect(() => {
+            let interval;
+            
+            if (officeCheckin && isTimerRunning) {
+              interval = setInterval(() => {
+                const [checkinHour, checkinMin] = officeCheckin.split(':').map(num => parseInt(num));
+                const now = new Date();
+                const currentHour = now.getHours();
+                const currentMin = now.getMinutes();
+                const currentSec = now.getSeconds();
+                
+                const checkinTimeInSeconds = (checkinHour * 3600) + (checkinMin * 60);
+                const currentTimeInSeconds = (currentHour * 3600) + (currentMin * 60) + currentSec;
+                
+                let totalSecondsWorked = currentTimeInSeconds - checkinTimeInSeconds;
+                
+                if (totalSecondsWorked < 0) {
+                  totalSecondsWorked += 24 * 3600;
+                }
+                
+                const workedHours = Math.floor(totalSecondsWorked / 3600);
+                const workedMinutes = Math.floor((totalSecondsWorked % 3600) / 60);
+                const workedSeconds = totalSecondsWorked % 60;
+                
+                const totalWorkedMinutes = Math.floor(totalSecondsWorked / 60);
+                const remainingMinutes = TOTAL_TARGET_MINUTES - totalWorkedMinutes;
+                const remainingHours = Math.floor(Math.abs(remainingMinutes) / 60);
+                const remainingMins = Math.abs(remainingMinutes) % 60;
+                
+                const percentage = Math.min((totalWorkedMinutes / TOTAL_TARGET_MINUTES) * 100, 100);
+                
+                setLiveTimer({
+                  workedHours,
+                  workedMinutes,
+                  workedSeconds,
+                  remainingHours,
+                  remainingMins,
+                  percentage: percentage.toFixed(1),
+                  isComplete: remainingMinutes <= 0,
+                  isOvertime: remainingMinutes < 0
+                });
+              }, 1000);
+            }
+            
+            return () => {
+              if (interval) clearInterval(interval);
+            };
+          }, [officeCheckin, isTimerRunning]);
+
+          // Calculate WFH times whenever inputs change
+          useEffect(() => {
+            if (officeCheckout && (hours || minutes)) {
+              const inputHours = parseInt(hours) || 0;
+              const inputMinutes = parseInt(minutes) || 0;
+              
+              const totalInputMinutes = inputHours * 60 + inputMinutes;
+              const remainingMinutes = TOTAL_TARGET_MINUTES - totalInputMinutes;
+              
+              if (remainingMinutes > 0) {
+                const [checkoutHour, checkoutMin] = officeCheckout.split(':').map(num => parseInt(num));
+                
+                // WFH Check-in = Office checkout + 1 minute
+                let wfhCheckinHour = checkoutHour;
+                let wfhCheckinMin = checkoutMin + 1;
+                
+                if (wfhCheckinMin >= 60) {
+                  wfhCheckinHour += 1;
+                  wfhCheckinMin -= 60;
+                }
+                if (wfhCheckinHour >= 24) {
+                  wfhCheckinHour -= 24;
+                }
+                
+                // WFH Checkout = WFH Check-in + remaining minutes
+                let checkoutMinTotal = wfhCheckinHour * 60 + wfhCheckinMin + remainingMinutes;
+                let wfhCheckoutHour = Math.floor(checkoutMinTotal / 60) % 24;
+                let wfhCheckoutMin = checkoutMinTotal % 60;
+                
+                const formatTime = (h, m) => {
+                  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+                };
+                
+                setWfhTimes({
+                  checkin: formatTime(wfhCheckinHour, wfhCheckinMin),
+                  checkout: formatTime(wfhCheckoutHour, wfhCheckoutMin)
+                });
+              } else {
+                setWfhTimes({ checkin: '', checkout: '' });
+              }
+            } else {
+              setWfhTimes({ checkin: '', checkout: '' });
+            }
+          }, [hours, minutes, officeCheckout]);
+
+          // PWA Install Prompt
+          useEffect(() => {
+            const handler = (e) => {
+              e.preventDefault();
+              setDeferredPrompt(e);
+              setShowInstallPrompt(true);
+            };
+
+            window.addEventListener('beforeinstallprompt', handler);
+            return () => window.removeEventListener('beforeinstallprompt', handler);
+          }, []);
+
+          const handleInstallClick = async () => {
+            if (!deferredPrompt) return;
+            
+            deferredPrompt.prompt();
+            const { outcome } = await deferredPrompt.userChoice;
+            
+            setDeferredPrompt(null);
+            setShowInstallPrompt(false);
+          };
+
+          const startLiveTimer = () => {
+            if (officeCheckin) {
+              setIsTimerRunning(true);
+            }
+          };
+
+          const stopLiveTimer = () => {
+            setIsTimerRunning(false);
+            if (liveTimer) {
+              setHours(liveTimer.workedHours.toString());
+              setMinutes(liveTimer.workedMinutes.toString());
+            }
+          };
+
+          const calculateRemaining = () => {
+            const inputHours = parseInt(hours) || 0;
+            const inputMinutes = parseInt(minutes) || 0;
+            
+            const totalInputMinutes = inputHours * 60 + inputMinutes;
+            const remainingMinutes = TOTAL_TARGET_MINUTES - totalInputMinutes;
+            
+            const remainingHours = Math.floor(Math.abs(remainingMinutes) / 60);
+            const remainingMins = Math.abs(remainingMinutes) % 60;
+            
+            const percentage = Math.min((totalInputMinutes / TOTAL_TARGET_MINUTES) * 100, 100);
+            
+            setResult({
+              remainingHours,
+              remainingMins,
+              isComplete: remainingMinutes <= 0,
+              isOvertime: remainingMinutes < 0,
+              percentage: percentage.toFixed(1),
+              totalWorked: `${inputHours}h ${inputMinutes}m`
+            });
+          };
+
+          const handleReset = () => {
+            setHours('');
+            setMinutes('');
+            setOfficeCheckout('');
+            setResult(null);
+            setOfficeCheckin('');
+            setLiveTimer(null);
+            setIsTimerRunning(false);
+            setWfhTimes({ checkin: '', checkout: '' });
+          };
+
+          // Icon Components
+          const ClockIcon = () => (
+            <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <circle cx="12" cy="12" r="10" strokeWidth="2"/>
+              <path strokeLinecap="round" strokeWidth="2" d="M12 6v6l4 2"/>
+            </svg>
+          );
+
+          const TargetIcon = () => (
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <circle cx="12" cy="12" r="10" strokeWidth="2"/>
+              <circle cx="12" cy="12" r="6" strokeWidth="2"/>
+              <circle cx="12" cy="12" r="2" strokeWidth="2"/>
+            </svg>
+          );
+
+          const CheckIcon = () => (
+            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+          );
+
+          const TrendingIcon = () => (
+            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/>
+            </svg>
+          );
+
+          const SmallClockIcon = () => (
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <circle cx="12" cy="12" r="10" strokeWidth="2"/>
+              <path strokeLinecap="round" strokeWidth="2" d="M12 6v6l4 2"/>
+            </svg>
+          );
+
+          const DownloadIcon = () => (
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+            </svg>
+          );
+
+          return (
+            <>
+              <div className="min-h-screen bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 p-4 flex items-center justify-center">
+                <div className="w-full max-w-md">
+                  {/* Header */}
+                  <div className="text-center mb-8">
+                    <div className="inline-flex items-center justify-center w-20 h-20 bg-white rounded-3xl shadow-lg mb-4 p-2">
+                      <img src="app-icon.png" alt="Timesheet Tracker" className="w-full h-full rounded-2xl" />
+                    </div>
+                    <h1 className="text-3xl font-bold text-white mb-2">Timesheet Tracker</h1>
+                    <p className="text-indigo-100">Track your daily work hours efficiently</p>
+                  </div>
+
+                  {/* Main Card */}
+                  <div className="bg-white rounded-3xl shadow-2xl p-6 mb-4">
+                    {/* Target Display */}
+                    <div className="bg-gradient-to-r from-indigo-50 to-purple-50 rounded-2xl p-4 mb-6">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <div className="text-indigo-600">
+                            <TargetIcon />
+                          </div>
+                          <span className="text-sm font-medium text-gray-600">Daily Target</span>
+                        </div>
+                        <span className="text-2xl font-bold text-indigo-600">9h 15m</span>
+                      </div>
+                    </div>
+
+                    {/* Live Timer Section */}
+                    <div className="bg-gradient-to-r from-green-50 to-emerald-50 rounded-2xl p-4 mb-6 border-2 border-green-200">
+                      <div className="flex items-center gap-2 mb-3">
+                        <div className="text-green-600">
+                          <SmallClockIcon />
+                        </div>
+                        <span className="text-sm font-semibold text-gray-700">Live Timer (Real-time)</span>
+                      </div>
+                      
+                      <div className="mb-3">
+                        <label className="block text-xs font-semibold text-gray-600 mb-2">
+                          Office Check-in Time
+                        </label>
+                        <input
+                          type="time"
+                          value={officeCheckin}
+                          onChange={(e) => setOfficeCheckin(e.target.value)}
+                          className="w-full px-3 py-2 text-center text-lg font-semibold border-2 border-green-300 rounded-xl focus:border-green-500 focus:outline-none transition-colors"
+                          disabled={isTimerRunning}
+                        />
+                      </div>
+
+                      {!isTimerRunning ? (
+                        <button
+                          onClick={startLiveTimer}
+                          disabled={!officeCheckin}
+                          className={`w-full py-2 rounded-xl font-semibold transition-all ${
+                            officeCheckin
+                              ? 'bg-green-600 text-white active:scale-95'
+                              : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                          }`}
+                        >
+                          ▶️ Start Live Timer
+                        </button>
+                      ) : (
+                        <button
+                          onClick={stopLiveTimer}
+                          className="w-full bg-red-500 text-white py-2 rounded-xl font-semibold active:scale-95 transition-all"
+                        >
+                          ⏸️ Stop & Use This Time
+                        </button>
+                      )}
+
+                      {/* Live Timer Display */}
+                      {liveTimer && isTimerRunning && (
+                        <div className="mt-4 space-y-3">
+                          <div className="bg-white rounded-xl p-4 border-2 border-green-300">
+                            <p className="text-xs text-gray-500 mb-2 text-center">Time Worked (Live)</p>
+                            <div className="text-center">
+                              <span className="text-4xl font-bold text-green-600">
+                                {String(liveTimer.workedHours).padStart(2, '0')}:
+                                {String(liveTimer.workedMinutes).padStart(2, '0')}:
+                                {String(liveTimer.workedSeconds).padStart(2, '0')}
+                              </span>
+                            </div>
+                            <p className="text-xs text-gray-500 mt-1 text-center">HH:MM:SS</p>
+                          </div>
+
+                          <div className="bg-gray-100 rounded-full h-2 overflow-hidden">
+                            <div
+                              className={`h-full transition-all duration-300 ${
+                                liveTimer.isComplete
+                                  ? 'bg-gradient-to-r from-green-400 to-emerald-500'
+                                  : 'bg-gradient-to-r from-green-500 to-green-600'
+                              }`}
+                              style={{ width: `${liveTimer.percentage}%` }}
+                            />
+                          </div>
+
+                          <div className="flex items-center justify-between text-sm">
+                            <span className="text-gray-600">
+                              {liveTimer.isComplete ? (
+                                <span className="text-green-600 font-semibold">✅ Target Complete!</span>
+                              ) : (
+                                <span>Remaining: <span className="font-semibold text-orange-600">
+                                  {liveTimer.remainingHours}h {liveTimer.remainingMins}m
+                                </span></span>
+                              )}
+                            </span>
+                            <span className="font-semibold text-green-600">{liveTimer.percentage}%</span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Manual Entry Section */}
+                    <div className="border-t-2 border-gray-200 pt-6 mb-6">
+                      <div className="flex items-center gap-2 mb-4">
+                        <span className="text-sm font-semibold text-gray-600">Manual Time Entry</span>
+                      </div>
+
+                      {/* Time Worked Input */}
+                      <div className="mb-4">
+                        <label className="block text-sm font-semibold text-gray-700 mb-3">
+                          Total Time Worked Today
+                        </label>
+                        <div className="flex gap-3">
+                          <div className="flex-1">
+                            <input
+                              type="number"
+                              inputMode="numeric"
+                              pattern="[0-9]*"
+                              min="0"
+                              max="23"
+                              value={hours}
+                              onChange={(e) => setHours(e.target.value)}
+                              placeholder="0"
+                              className="w-full px-4 py-3 text-center text-2xl font-semibold border-2 border-gray-200 rounded-xl focus:border-indigo-500 focus:outline-none transition-colors"
+                            />
+                            <p className="text-center text-xs text-gray-500 mt-1">hours</p>
+                          </div>
+                          <div className="flex items-center text-2xl font-bold text-gray-400">:</div>
+                          <div className="flex-1">
+                            <input
+                              type="number"
+                              inputMode="numeric"
+                              pattern="[0-9]*"
+                              min="0"
+                              max="59"
+                              value={minutes}
+                              onChange={(e) => setMinutes(e.target.value)}
+                              placeholder="0"
+                              className="w-full px-4 py-3 text-center text-2xl font-semibold border-2 border-gray-200 rounded-xl focus:border-indigo-500 focus:outline-none transition-colors"
+                            />
+                            <p className="text-center text-xs text-gray-500 mt-1">minutes</p>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Last Office Checkout Time */}
+                      <div className="mb-4">
+                        <label className="block text-sm font-semibold text-gray-700 mb-3">
+                          Last Office Checkout Time
+                        </label>
+                        <input
+                          type="time"
+                          value={officeCheckout}
+                          onChange={(e) => setOfficeCheckout(e.target.value)}
+                          className="w-full px-4 py-3 text-center text-xl font-semibold border-2 border-gray-200 rounded-xl focus:border-indigo-500 focus:outline-none transition-colors"
+                          placeholder="17:24"
+                        />
+                      </div>
+
+                      {/* WFH Timesheet - Auto-calculated & Read-only */}
+                      {wfhTimes.checkin && wfhTimes.checkout && (
+                        <div className="bg-gradient-to-r from-blue-50 to-cyan-50 border-2 border-blue-300 rounded-2xl p-4 mb-4">
+                          <div className="flex items-center gap-2 mb-3">
+                            <div className="text-blue-600">
+                              <SmallClockIcon />
+                            </div>
+                            <h3 className="text-sm font-bold text-gray-800">WFH Timesheet (Auto-calculated)</h3>
+                          </div>
+                          
+                          <div className="space-y-3">
+                            <div>
+                              <label className="block text-xs font-semibold text-gray-600 mb-2">
+                                WFH Check-in Time
+                              </label>
+                              <input
+                                type="text"
+                                value={wfhTimes.checkin}
+                                readOnly
+                                disabled
+                                className="w-full px-4 py-3 text-center text-2xl font-bold text-blue-600 bg-white border-2 border-blue-200 rounded-xl"
+                              />
+                            </div>
+                            
+                            <div>
+                              <label className="block text-xs font-semibold text-gray-600 mb-2">
+                                WFH Check-out Time
+                              </label>
+                              <input
+                                type="text"
+                                value={wfhTimes.checkout}
+                                readOnly
+                                disabled
+                                className="w-full px-4 py-3 text-center text-2xl font-bold text-blue-600 bg-white border-2 border-blue-200 rounded-xl"
+                              />
+                            </div>
+
+                            <div className="bg-blue-100 rounded-lg p-3">
+                              <p className="text-xs text-blue-700 font-medium text-center">
+                                📋 Use these times for your WFH timesheet entry
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Buttons */}
+                    <div className="flex gap-3 mb-6">
+                      <button
+                        onClick={calculateRemaining}
+                        className="flex-1 bg-gradient-to-r from-indigo-600 to-purple-600 text-white font-semibold py-3 rounded-xl shadow-lg active:scale-95 transition-all"
+                      >
+                        Calculate
+                      </button>
+                      <button
+                        onClick={handleReset}
+                        className="px-6 bg-gray-100 text-gray-700 font-semibold py-3 rounded-xl active:bg-gray-200 transition-colors"
+                      >
+                        Reset
+                      </button>
+                    </div>
+
+                    {/* Results */}
+                    {result && (
+                      <div className="space-y-4">
+                        {/* Progress Bar */}
+                        <div className="bg-gray-100 rounded-full h-3 overflow-hidden">
+                          <div
+                            className={`h-full transition-all duration-1000 ${
+                              result.isComplete
+                                ? 'bg-gradient-to-r from-green-400 to-emerald-500'
+                                : 'bg-gradient-to-r from-indigo-500 to-purple-500'
+                            }`}
+                            style={{ width: `${result.percentage}%` }}
+                          />
+                        </div>
+                        <div className="text-center text-sm font-medium text-gray-600">
+                          {result.percentage}% Complete
+                        </div>
+
+                        {/* Result Card */}
+                        <div
+                          className={`rounded-2xl p-6 ${
+                            result.isComplete
+                              ? 'bg-gradient-to-r from-green-50 to-emerald-50 border-2 border-green-200'
+                              : 'bg-gradient-to-r from-orange-50 to-amber-50 border-2 border-orange-200'
+                          }`}
+                        >
+                          <div className="flex items-center gap-3 mb-3">
+                            <div className={result.isComplete ? 'text-green-600' : 'text-orange-600'}>
+                              {result.isComplete ? <CheckIcon /> : <TrendingIcon />}
+                            </div>
+                            <h3 className="text-lg font-bold text-gray-800">
+                              {result.isComplete ? 'Target Achieved! 🎉' : 'Remaining Time'}
+                            </h3>
+                          </div>
+
+                          {result.isComplete ? (
+                            <div className="space-y-2">
+                              <p className="text-3xl font-bold text-green-600">
+                                All Done!
+                              </p>
+                              {result.isOvertime && (
+                                <p className="text-sm text-gray-600">
+                                  Overtime: <span className="font-semibold text-green-600">
+                                    {result.remainingHours}h {result.remainingMins}m
+                                  </span>
+                                </p>
+                              )}
+                            </div>
+                          ) : (
+                            <div>
+                              <p className="text-4xl font-bold text-orange-600 mb-2">
+                                {result.remainingHours}h {result.remainingMins}m
+                              </p>
+                              <p className="text-sm text-gray-600">
+                                You need to work <span className="font-semibold">{result.remainingHours} hours and {result.remainingMins} minutes</span> more
+                              </p>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Summary */}
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="bg-gray-50 rounded-xl p-3">
+                            <p className="text-xs text-gray-500 mb-1">Worked</p>
+                            <p className="text-lg font-bold text-gray-800">{result.totalWorked}</p>
+                          </div>
+                          <div className="bg-gray-50 rounded-xl p-3">
+                            <p className="text-xs text-gray-500 mb-1">Target</p>
+                            <p className="text-lg font-bold text-gray-800">9h 15m</p>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Footer */}
+                  <p className="text-center text-white text-sm opacity-75">
+                    Stay productive and track your time efficiently ⏱️
+                  </p>
+                </div>
+              </div>
+
+              {/* Install Prompt */}
+              {showInstallPrompt && (
+                <div className="install-prompt">
+                  <div className="flex items-center gap-4">
+                    <div className="flex-1">
+                      <h3 className="font-bold text-gray-800 mb-1">Install App</h3>
+                      <p className="text-sm text-gray-600">Add to home screen for quick access</p>
+                    </div>
+                    <button
+                      onClick={handleInstallClick}
+                      className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg font-semibold active:scale-95 transition-transform"
+                    >
+                      <DownloadIcon />
+                      Install
+                    </button>
+                  </div>
+                  <button
+                    onClick={() => setShowInstallPrompt(false)}
+                    className="absolute top-2 right-2 text-gray-400 hover:text-gray-600"
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
+            </>
+          );
+        }
+
+        // Render the app
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<TimesheetTracker />);
+
+        // Register Service Worker
+        if ('serviceWorker' in navigator) {
+          window.addEventListener('load', () => {
+            navigator.serviceWorker.register('/service-worker.js')
+              .then(reg => console.log('Service Worker registered'))
+              .catch(err => console.log('Service Worker registration failed'));
+          });
+        }
+    </script>
+</body>
+</html>
