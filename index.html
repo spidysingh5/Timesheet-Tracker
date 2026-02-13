@@ -105,7 +105,357 @@
                 const checkinTotalMinutes = checkinHour * 60 + checkinMin;
                 const checkoutTotalMinutes = checkinTotalMinutes + totalTargetMinutes;
                 
-                const checkoutHour = Math.floor(checkoutTotalMinutes / 60) % 24;
+                let checkoutHour = Math.floor(checkoutTotalMinutes / 60) % 24;
+                const checkoutMin = checkoutTotalMinutes % 60;
+                
+                // Convert to 12-hour format with AM/PM
+                const period = checkoutHour >= 12 ? 'PM' : 'AM';
+                const displayHour = checkoutHour % 12 || 12;
+                
+                const formatTime = (h, m, p) => {
+                  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')} ${p}`;
+                };
+                
+                setExpectedOfficeCheckout(formatTime(displayHour, checkoutMin, period));
+              } else {
+                setExpectedOfficeCheckout('');
+              }
+            } else {
+              setExpectedOfficeCheckout('');
+            }
+          }, [officeCheckin, officeHoursTarget, officeMinutesTarget]);
+
+          const startLiveTimer = () => {
+            if (officeCheckin) {
+              if (isTimerRunning) {
+                stopLiveTimer();
+              } else {
+                setIsTimerRunning(true);
+              }
+            }
+          };
+
+          const stopLiveTimer = () => {
+            setIsTimerRunning(false);
+            if (liveTimer) {
+              setHours(liveTimer.workedHours.toString());
+              setMinutes(liveTimer.workedMinutes.toString());
+            }
+          };
+
+          // Live Timer Effect
+          useEffect(() => {
+            let interval;
+            
+            if (officeCheckin && isTimerRunning) {
+              interval = setInterval(() => {
+                const [checkinHour, checkinMin] = officeCheckin.split(':').map(num => parseInt(num));
+                const now = new Date();
+                const currentHour = now.getHours();
+                const currentMin = now.getMinutes();
+                const currentSec = now.getSeconds();
+                
+                const checkinTimeInSeconds = (checkinHour * 3600) + (checkinMin * 60);
+                const currentTimeInSeconds = (currentHour * 3600) + (currentMin * 60) + currentSec;
+                
+                let totalSecondsWorked = currentTimeInSeconds - checkinTimeInSeconds;
+                
+                if (totalSecondsWorked < 0) {
+                  totalSecondsWorked += 24 * 3600;
+                }
+                
+                const workedHours = Math.floor(totalSecondsWorked / 3600);
+                const workedMinutes = Math.floor((totalSecondsWorked % 3600) / 60);
+                const workedSeconds = totalSecondsWorked % 60;
+                
+                const totalWorkedMinutes = Math.floor(totalSecondsWorked / 60);
+                const remainingMinutes = TOTAL_TARGET_MINUTES - totalWorkedMinutes;
+                const remainingHours = Math.floor(Math.abs(remainingMinutes) / 60);
+                const remainingMins = Math.abs(remainingMinutes) % 60;
+                
+                const percentage = Math.min((totalWorkedMinutes / TOTAL_TARGET_MINUTES) * 100, 100);
+                
+                setLiveTimer({
+                  workedHours,
+                  workedMinutes,
+                  workedSeconds,
+                  remainingHours,
+                  remainingMins,
+                  percentage: percentage.toFixed(1),
+                  isComplete: remainingMinutes <= 0,
+                  isOvertime: remainingMinutes < 0
+                });
+              }, 1000);
+            }
+            
+            return () => {
+              if (interval) clearInterval(interval);
+            };
+          }, [officeCheckin, isTimerRunning]);
+
+          // Calculate WFH times whenever inputs change
+          useEffect(() => {
+            if (officeCheckout) {
+              let inputHours = 0;
+              let inputMinutes = 0;
+              
+              // Use office check-in time if available, otherwise use manual entry
+              if (officeCheckin) {
+                const [checkinHour, checkinMin] = officeCheckin.split(':').map(num => parseInt(num));
+                const [checkoutHour, checkoutMin] = officeCheckout.split(':').map(num => parseInt(num));
+                
+                const checkinTotalMinutes = checkinHour * 60 + checkinMin;
+                let checkoutTotalMinutes = checkoutHour * 60 + checkoutMin;
+                
+                // Handle day rollover
+                if (checkoutTotalMinutes < checkinTotalMinutes) {
+                  checkoutTotalMinutes += 24 * 60;
+                }
+                
+                const totalWorkedMinutes = checkoutTotalMinutes - checkinTotalMinutes;
+                inputHours = Math.floor(totalWorkedMinutes / 60);
+                inputMinutes = totalWorkedMinutes % 60;
+              } else {
+                inputHours = parseInt(hours) || 0;
+                inputMinutes = parseInt(minutes) || 0;
+              }
+              
+              const totalInputMinutes = inputHours * 60 + inputMinutes;
+              const remainingMinutes = TOTAL_TARGET_MINUTES - totalInputMinutes;
+              
+              if (remainingMinutes > 0) {
+                const [checkoutHour, checkoutMin] = officeCheckout.split(':').map(num => parseInt(num));
+                
+                // WFH Check-in = Office checkout + 1 minute
+                let wfhCheckinHour = checkoutHour;
+                let wfhCheckinMin = checkoutMin + 1;
+                
+                if (wfhCheckinMin >= 60) {
+                  wfhCheckinHour += 1;
+                  wfhCheckinMin -= 60;
+                }
+                if (wfhCheckinHour >= 24) {
+                  wfhCheckinHour -= 24;
+                }
+                
+                // WFH Checkout = WFH Check-in + remaining minutes
+                let checkoutMinTotal = wfhCheckinHour * 60 + wfhCheckinMin + remainingMinutes;
+                let wfhCheckoutHour = Math.floor(checkoutMinTotal / 60) % 24;
+                let wfhCheckoutMin = checkoutMinTotal % 60;
+                
+                const formatTime = (h, m) => {
+                  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+                };
+                
+                setWfhTimes({
+                  checkin: formatTime(wfhCheckinHour, wfhCheckinMin),
+                  checkout: formatTime(wfhCheckoutHour, wfhCheckoutMin)
+                });
+              } else {
+                setWfhTimes({ checkin: '', checkout: '' });
+              }
+            } else {
+              setWfhTimes({ checkin: '', checkout: '' });
+            }
+          }, [hours, minutes, officeCheckout, officeCheckin]);
+
+          // PWA Install Prompt
+          useEffect(() => {
+            const handler = (e) => {
+              e.preventDefault();
+              setDeferredPrompt(e);
+              setShowInstallPrompt(true);
+            };
+
+            window.addEventListener('beforeinstallprompt', handler);
+            return () => window.removeEventListener('beforeinstallprompt', handler);
+          }, []);
+
+          const handleInstallClick = async () => {
+            if (!deferredPrompt) return;
+            
+            deferredPrompt.prompt();
+            const { outcome } = await deferredPrompt.userChoice;
+            
+            setDeferredPrompt(null);
+            setShowInstallPrompt(false);
+          };
+
+          const startLiveTimer = () => {
+            if (officeCheckin) {
+              setIsTimerRunning(true);
+            }
+          };
+
+          const stopLiveTimer = () => {
+            setIsTimerRunning(false);
+            if (liveTimer) {
+              setHours(liveTimer.workedHours.toString());
+              setMinutes(liveTimer.workedMinutes.toString());
+            }
+          };
+
+          const calculateRemaining = () => {
+            const inputHours = parseInt(hours) || 0;
+            const inputMinutes = parseInt(minutes) || 0;
+            
+            const totalInputMinutes = inputHours * 60 + inputMinutes;
+            const remainingMinutes = TOTAL_TARGET_MINUTES - totalInputMinutes;
+            
+            const remainingHours = Math.floor(Math.abs(remainingMinutes) / 60);
+            const remainingMins = Math.abs(remainingMinutes) % 60;
+            
+            const percentage = Math.min((totalInputMinutes / TOTAL_TARGET_MINUTES) * 100, 100);
+            
+            setResult({
+              remainingHours,
+              remainingMins,
+              isComplete: remainingMinutes <= 0,
+              isOvertime: remainingMinutes < 0,
+              percentage: percentage.toFixed(1),
+              totalWorked: `${inputHours}h ${inputMinutes}m`
+            });
+          };
+
+          const handleReset = () => {
+            setHours('');
+            setMinutes('');
+            setOfficeCheckout('');
+            setResult(null);
+            setOfficeCheckin('');
+            setLiveTimer(null);
+            setIsTimerRunning(false);
+            setWfhTimes({ checkin: '', checkout: '' });
+            setOfficeHoursTarget('');
+            setOfficeMinutesTarget('');
+            setExpectedOfficeCheckout('');
+          };
+
+          // Icon Components
+          const ClockIcon = () => (
+            <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <circle cx="12" cy="12" r="10" strokeWidth="2"/>
+              <path strokeLinecap="round" strokeWidth="2" d="M12 6v6l4 2"/>
+            </svg>
+          );
+
+          const TargetIcon = () => (
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <circle cx="12" cy="12" r="10" strokeWidth="2"/>
+              <circle cx="12" cy="12" r="6" strokeWidth="2"/>
+              <circle cx="12" cy="12" r="2" strokeWidth="2"/>
+            </svg>
+          );
+
+          const CheckIcon = () => (
+            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+          );
+
+          const TrendingIcon = () => (
+            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/>
+            </svg>
+          );
+
+          const SmallClockIcon = () => (
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <circle cx="12" cy="12" r="10" strokeWidth="2"/>
+              <path strokeLinecap="round" strokeWidth="2" d="M12 6v6l4 2"/>
+            </svg>
+          );
+
+          const DownloadIcon = () => (
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+            </svg>
+          );
+
+          return (
+            <>
+              <div className="min-h-screen bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 p-4 flex items-center justify-center">
+                <div className="w-full max-w-md">
+                  {/* Header */}
+                  <div className="text-center mb-8">
+                    <div className="inline-flex items-center justify-center w-20 h-20 bg-white rounded-3xl shadow-lg mb-4 p-2">
+                      <img src="app-icon.png" alt="Timesheet Tracker" className="w-full h-full rounded-2xl" />
+                    </div>
+                    <h1 className="text-3xl font-bold text-white mb-2">Timesheet Tracker</h1>
+                    <p className="text-indigo-100">Track your daily work hours efficiently</p>
+                  </div>
+
+                  {/* Main Card */}
+                  <div className="bg-white rounded-3xl shadow-2xl p-6 mb-4">
+                    {/* Target Display */}
+                    <div className="bg-gradient-to-r from-indigo-50 to-purple-50 rounded-2xl p-4 mb-6">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <div className="text-indigo-600">
+                            <TargetIcon />
+                          </div>
+                          <span className="text-sm font-medium text-gray-600">Daily Target</span>
+                        </div>
+                        <span className="text-2xl font-bold text-indigo-600">9h 15m</span>
+                      </div>
+                    </div>
+
+                    {/* Live Timer Section */}
+                    <div className="bg-gradient-to-r from-green-50 to-emerald-50 rounded-2xl p-4 mb-6 border-2 border-green-200">
+                      <div className="flex items-center gap-2 mb-3">
+                        <div className="text-green-600">
+                          <SmallClockIcon />
+                        </div>
+                        <span className="text-sm font-semibold text-gray-700">Live Timer (Real-time)</span>
+                      </div>
+                      
+                      <div className="mb-3">
+                        <label className="block text-xs font-semibold text-gray-600 mb-2">
+                          Office Check-in Time
+                        </label>
+                        <input
+                          type="time"
+                          value={officeCheckin}
+                          onChange={(e) => setOfficeCheckin(e.target.value)}
+                          className="w-full px-3 py-2 text-center text-lg font-semibold border-2 border-green-300 rounded-xl focus:border-green-500 focus:outline-none transition-colors"
+                        />
+                      </div>
+
+                      <button
+                        onClick={startLiveTimer}
+                        disabled={!officeCheckin}
+                        className={`w-full py-2 rounded-xl font-semibold transition-all ${
+                          officeCheckin
+                            ? isTimerRunning ? 'bg-red-500 text-white active:scale-95' : 'bg-green-600 text-white active:scale-95'
+                            : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                        }`}
+                      >
+                        {isTimerRunning ? '⏸️ Stop & Use This Time' : '▶️ Start Live Timer'}
+                      </button>
+
+                      {/* Live Timer Display */}
+                      {liveTimer && isTimerRunning && (
+                        <div className="mt-4 space-y-3">
+                          <div className="bg-white rounded-xl p-4 border-2 border-green-300">
+                            <p className="text-xs text-gray-500 mb-2 text-center">Time Worked (Live)</p>
+                            <div className="text-center">
+                              <span className="text-4xl font-bold text-green-600">
+                                {String(liveTimer.workedHours).padStart(2, '0')}:
+                                {String(liveTimer.workedMinutes).padStart(2, '0')}:
+                                {String(liveTimer.workedSeconds).padStart(2, '0')}
+                              </span>
+                            </div>
+                            <p className="text-xs text-gray-500 mt-1 text-center">HH:MM:SS</p>
+                          </div>
+
+                          <div className="bg-gray-100 rounded-full h-2 overflow-hidden">
+                            <div
+                              className={`h-full transition-all duration-300 ${
+                                liveTimer.isComplete
+                                  ? 'bg-gradient-to-r from-green-400 to-emerald-500'
+                                  : 'bg-gradient-to-r from-green-500 to-green-600'
+                              }`}
+                              style={{ width                const checkoutHour = Math.floor(checkoutTotalMinutes / 60) % 24;
                 const checkoutMin = checkoutTotalMinutes % 60;
                 
                 const formatTime = (h, m) => {
